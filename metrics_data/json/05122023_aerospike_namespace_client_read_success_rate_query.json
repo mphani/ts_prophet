@@ -1,0 +1,7 @@
+{
+    "resultType": "matrix",
+    "result": [],
+    "query_name": "aerospike_namespace_client_read_success",
+    "sub_query_name": "rate_query",
+    "prom_query": "rate(aerospike_namespace_client_read_success[1m])"
+}

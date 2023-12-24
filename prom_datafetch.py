@@ -11,15 +11,33 @@ prometheus_url_to_get = os.environ.get( "PROMETHEUS_URL" , DEFAULT_PROM_URL)
 
 G_LOCAL_DATA_FOLDER="metrics_data"
 
+G_QUERY_MAP ={
+    "aerospike_namespace_client_write_success": 
+        { "simple_query":"aerospike_namespace_client_write_success" }, 
+        
+    "aerospike_namespace_client_read_success": {
+        "rate_query":"rate(aerospike_namespace_client_read_success[1m])" ,
+        "simple_query": "aerospike_namespace_client_read_success"
+        },
+}
+
 class PrometheusDataReader:
     def __init__(self, p_prom_url: str,  ):
         self.prometheus_url= self.__getPrometheusURL( p_prom_url)
     
-    def __fetch_data( self, p_query: str, p_start: int, p_end: int, p_step: str = "1m"):
+    def __get_query_from_map(self, p_query_name: str, p_sub_query_name: str,):
+        if p_query_name in G_QUERY_MAP:
+            l_sub_queries_dict = G_QUERY_MAP[ p_query_name]
+            return p_query_name, l_sub_queries_dict[p_sub_query_name ]
+        
+        return p_query_name
+    
+    def __fetch_data( self, p_query_name: str, p_sub_query_name: str, p_start: int, p_end: int, p_step: str = "1m"):
         # http://192.168.200.242:9090/api/v1/query_range?query=aerospike_namespace_client_write_success&start=1702274598&end=1702879398&step=1m
         
+        l_query_name, l_query = self.__get_query_from_map( p_query_name, p_sub_query_name) 
         l_params={
-            "query": p_query,
+            "query": l_query,
             "start": p_start,
             "end": p_end,
             "step": p_step
@@ -31,23 +49,28 @@ class PrometheusDataReader:
         http_response = requests.get( l_prometheus_url, params=l_params, verify=False)    
         if "data" in http_response.json():
             data = http_response.json()["data"]
-            return json.dumps(data, indent=4)
+            data["query_name"] = p_query_name
+            data["sub_query_name"] = p_sub_query_name
+            data["prom_query"] = l_query
+            # print( "\n**********\n",type(data),"***********\n",l_query)
+            l_json_dict = json.dumps(data, indent=4)
+            return l_json_dict
 
         # data = http_response.json()["data"]
         # return data
 
-        print("unable to find [data] element in response for query: ", p_query,"\n")
+        print("unable to find [data] element in response for query: ", p_query_name,"\n")
         return ""
     
-    def pulldata( self, p_query: str, p_start: int, p_end: int, p_step: str = "1m"):
-        l_data = self.__fetch_data( p_query, p_start, p_end, p_step)
+    def pulldata( self, p_query_name: str, p_sub_query_name: str, p_start: int, p_end: int, p_step: str = "1m"):
+        l_data = self.__fetch_data( p_query_name, p_sub_query_name, p_start, p_end, p_step)
         if len(l_data)==0:
             return
         
         # save data
-        self.__storeMetricsToFile(p_query, p_start,p_end, l_data)   
+        self.__storeMetricsToFile(p_query_name, p_sub_query_name, p_start,p_end, l_data)   
         
-    def pulldaywisedata(self, p_query: str, p_from_date: str, p_to_date: str, p_step: str = "1m"):
+    def pulldaywisedata(self, p_query_name: str, p_sub_query_name: str, p_from_date: str, p_to_date: str, p_step: str = "1m"):
         
         l_start_date = datetime.strptime(p_from_date, "%m/%d/%Y")
         if not p_to_date or len(p_to_date)==0:
@@ -68,19 +91,23 @@ class PrometheusDataReader:
             print( l_for_date_starttime, " : ", l_utc_starttime, "\t", l_for_date_endtime, " : ", l_utc_endtime)
             l_iter_date = l_iter_date + timedelta( days=1 )
             
-            l_data = self.pulldata( p_query, l_utc_starttime, l_utc_endtime, p_step)
+            l_data = self.pulldata( p_query_name, p_sub_query_name, l_utc_starttime, l_utc_endtime, p_step)
             # print( l_data)
     
-    def __get_filename(self, p_query: str, p_start: int, p_end: int):
+    def __get_filename(self, p_query_name: str, p_sub_query_name: str,p_start: int, p_end: int):
         l_startdate = datetime.strftime( datetime.fromtimestamp( p_start), "%d%m%Y" )
-        # l_end_date =  datetime.strftime( datetime.fromtimestamp( p_end), "%d%m%Y" )
-        # return G_LOCAL_DATA_FOLDER +"/json/" + l_startdate +"_" + l_end_date +"_" + p_query +".json"
-        return G_LOCAL_DATA_FOLDER +"/json/" + l_startdate +"_" + p_query +".json"
+        
+        l_name = p_query_name
+        
+        if len(p_sub_query_name)>0:
+            l_name= p_query_name+"_"+p_sub_query_name
+        
+        return G_LOCAL_DATA_FOLDER +"/json/" + l_startdate +"_" + l_name +".json"
         
         # return G_LOCAL_DATA_FOLDER +"/json/" + str(p_start) +"_" + str(p_end) +"_" + p_query +".json"
     
-    def __storeMetricsToFile(self, p_query: str, p_start: int, p_end: int, p_output: str):
-        l_filename = self.__get_filename( p_query, p_start, p_end)
+    def __storeMetricsToFile(self, p_query_name: str, p_sub_query_name: str, p_start: int, p_end: int, p_output: str):
+        l_filename = self.__get_filename( p_query_name, p_sub_query_name, p_start, p_end)
         # l_data_str = json.loads(p_output)
         print( l_filename)
         with open(l_filename, "w") as outfile:
@@ -105,7 +132,8 @@ class JsonToCsvConvertor:
     
     def save_to_csv(self, p_csv_lines: list, p_file_open_mode: str ="a"):
         with open( self.csv_filename, p_file_open_mode) as outfile:
-            outfile.writelines( "\n".join(p_csv_lines))
+            # outfile.writelines( "\n".join(p_csv_lines))
+            outfile.writelines( p_csv_lines)
     
     def convert_json_to_csv(self, p_folder: str=""):
         l_folder = p_folder or self.parent_folder
@@ -113,7 +141,8 @@ class JsonToCsvConvertor:
         # cluster_name  , instance , ns , service , metric_name , UTC-date-time, metric-value
         
         l_tmp_header = []
-        l_tmp_header.append("cluster_name,instance,ns,service,metric_name,UTC_date_time,metric_value\n")
+        # l_tmp_header.append("cluster_name,instance,ns,service,metric_name,utc_date_time,year,month,date,hour,minute,second,metric_value\n")
+        l_tmp_header.append("cluster_name,instance,ns,service,metric_name,sub_query_name,prom_query,utc_date_time,metric_value\n")
         self.save_to_csv( l_tmp_header,"w")
         
         for l_file in l_file_list:
@@ -158,11 +187,23 @@ class JsonToCsvConvertor:
         #                   1: <metric-value>
         # with above structure, lets parse
         l_results_arr = l_json_path["result"]
+        l_json_query_name = "NO_QUERY_NAME"
+        l_sub_query_name ="NO_SUB_QUERY"
+        l_prom_query ="NO_PROM_QUERY"
+        if "query_name" in l_json_path:
+            l_json_query_name = l_json_path["query_name"]
+            l_sub_query_name = l_json_path["sub_query_name"]
+            l_prom_query = l_json_path["prom_query"]
+            
         # Header
         # cluster_name  , instance , ns , service , metric_name , UTC-date-time, metric-value
         for l_result in l_results_arr:
             # Metric
-            l_metric_name = l_result["metric"]["__name__"] or ""
+            if "__name__" in l_result["metric"]:                
+                l_metric_name = l_result["metric"]["__name__"]
+            else:
+                l_metric_name = l_json_query_name
+                
             l_cluster_name = l_result["metric"]["cluster_name"] or ""
             l_instance = l_result["metric"]["instance"] or ""
             l_ns = l_result["metric"]["ns"] or ""
@@ -171,10 +212,25 @@ class JsonToCsvConvertor:
             l_values = l_result["values"]
             for l_val in l_values:
                 l_line = l_cluster_name +"," + l_instance +"," + l_ns +"," + l_service +"," + l_metric_name+","
-                l_line = l_line + str(l_val[0])+","+ str(l_val[1])
-                l_lines.append( l_line)
+                l_line = l_line + l_sub_query_name +"," + l_prom_query + ","
+
+                # (l_year, l_month, l_day, l_hour, l_minute, l_second)= self.__get_time_from_utc(l_val[0])
+                l_line = l_line + str(l_val[0])
+                l_line = l_line + "," + str(l_val[1])
+                
+                l_lines.append( l_line+"\n")
                 
         return l_lines
+    
+    def __get_time_from_utc(self, p_utc_timestamp):
+        l_datetime = datetime.fromtimestamp(p_utc_timestamp)
+        l_year = l_datetime.year
+        l_month = l_datetime.month
+        l_day = l_datetime.day
+        l_hour= l_datetime.hour
+        l_minute = l_datetime.minute
+        l_second = l_datetime.second
+        return l_year, l_month, l_day, l_hour, l_minute, l_second
             
 
 class DataProvider:        
@@ -183,15 +239,29 @@ class DataProvider:
         self.parent_folder = p_folder or G_LOCAL_DATA_FOLDER+"/json/"
         self.start_date = p_start_date or datetime.strftime( datetime.now(), "%m/%d/%Y")
         self.end_date = p_end_date or datetime.strftime( datetime.now(), "%m/%d/%Y")
+        self.metrics = []
+        # self.metrics = ["aerospike_namespace_client_write_success",
+        #                 "aerospike_namespace_client_read_success",
+        #                 ]
         
-        self.metrics = ["aerospike_namespace_client_write_success",
-                        "aerospike_namespace_client_read_success",
-                        ]
-    def generate(self):
-        for l_query in self.metrics:            
-            l_pdr = PrometheusDataReader( self.prometheus_url)
-            # print( "start-date: ", self.start_date,"\tend-date: ", self.end_date)
-            l_pdr.pulldaywisedata( l_query, self.start_date, self.end_date)
+        for l_key in G_QUERY_MAP.keys():
+            self.metrics.append( l_key)
+        
+    def generate(self, p_run_single_query: str=""):
+        for l_query in self.metrics:
+            if len(p_run_single_query)>0 and l_query== p_run_single_query:
+                l_pdr = PrometheusDataReader( self.prometheus_url)
+                l_queries_dict = G_QUERY_MAP[ l_query]
+                for l_dict_sub_query in l_queries_dict.keys():
+                    print( l_dict_sub_query)
+                    l_pdr.pulldaywisedata( l_query, l_dict_sub_query, self.start_date, self.end_date)
+            else:                       
+                l_pdr = PrometheusDataReader( self.prometheus_url)
+                # print( "start-date: ", self.start_date,"\tend-date: ", self.end_date)
+                l_queries_dict = G_QUERY_MAP[ l_query]
+                for l_dict_sub_query in l_queries_dict.keys():
+                    print( l_dict_sub_query)
+                    l_pdr.pulldaywisedata( l_query, l_dict_sub_query, self.start_date, self.end_date)
         
     
 if __name__ == "__main__":
@@ -203,10 +273,10 @@ if __name__ == "__main__":
     # print(l_json_data)
     # a.pulldaywisedata("aerospike_namespace_client_write_success", "12/01/2023", "12/17/2023")
     
-    # c = DataProvider(p_start_date="12/01/2023", p_end_date="12/17/2023")
-    # c.generate()
+    # c = DataProvider(p_start_date="12/01/2023", )
+    c = DataProvider()
+    c.generate()
 
     b = JsonToCsvConvertor( )
     b.convert_json_to_csv()
-    # l_lines = b.load_parse_json("16122023_aerospike_namespace_client_write_success.json")
-    # print( l_lines)
+    

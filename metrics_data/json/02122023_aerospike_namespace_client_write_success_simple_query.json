@@ -1,0 +1,7 @@
+{
+    "resultType": "matrix",
+    "result": [],
+    "query_name": "aerospike_namespace_client_write_success",
+    "sub_query_name": "simple_query",
+    "prom_query": "aerospike_namespace_client_write_success"
+}
