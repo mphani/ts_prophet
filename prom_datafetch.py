@@ -273,8 +273,8 @@ if __name__ == "__main__":
     # print(l_json_data)
     # a.pulldaywisedata("aerospike_namespace_client_write_success", "12/01/2023", "12/17/2023")
     
-    # c = DataProvider(p_start_date="12/01/2023", )
-    c = DataProvider()
+    c = DataProvider(p_start_date="12/23/2023", )
+    # c = DataProvider()
     c.generate()
 
     b = JsonToCsvConvertor( )
